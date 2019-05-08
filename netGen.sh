@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# This function checks if a package exists, and if not, will install it
 packageExists () {
     if [ $(dpkg-query -W -f='${Status}' $1 2>/dev/null | grep -c "ok installed") -eq 0 ]
     then
@@ -13,9 +14,12 @@ apt update
 # check each package and install if it doesn't exist.
 # use git for the right version of 
 packageExists git
+
+# clone the ovs repo and checkout version 2.5
 git clone https://github.com/openvswitch/ovs.git /root/ovs
 git checkout origin/branch-2.5
 
+# install all the things
 packageExists net-tools
 packageExists libcap-ng-dev
 packageExists libunbound-dev
@@ -30,8 +34,6 @@ packageExists build-essential
 packageExists hostapd
 packageExists dnsmasq
 
-# works up to this point
-
 # ovs package comes with executable boot.sh
 # make preparations for installation, then install
 cd /root/ovs/
@@ -45,6 +47,7 @@ export PATH=$PATH:/usr/local/share/openvswitch/scripts
 # make the PATH change permanent
 echo "export PATH=$PATH:/usr/local/share/openvswitch/scripts" >> ~/.bashrc
 
+# start ovs, create a bride which is basically a virtual switch. Bring the bridge interface up
 ovs-ctl start
 ovs-vsctl add-br br0
 ifconfig br0 up
@@ -53,6 +56,7 @@ ifconfig br0 up
 a=$(ifconfig | grep ^w.* | awk 'NR==1 {print $1}' | grep -o '\w' | tr -d '\n')
 b=$(ifconfig | grep ^w.* | awk 'NR==2 {print $1}' | grep -o '\w' | tr -d '\n')
 c=$(ifconfig | grep ^w.* | awk 'NR==3 {print $1}' | grep -o '\w' | tr -d '\n')
+# This part just ensures they default to none if their isn't a card for the specified option
 a=${a:-none}
 b=${b:-none}
 c=${c:-none}
@@ -74,7 +78,11 @@ done
 
 # add an interface to the switch as a port
 ovs-vsctl add-port br0 ${!choice}
+
+# get name the user wants for the access point
 read -p "Enter a name for the access point: " ssid
+
+# get the ip address for the ODL node
 read -p "Enter the ip address of the cloud ODL node: " IP
 
 #choiceOkay=0
@@ -91,9 +99,7 @@ read -p "Enter the ip address of the cloud ODL node: " IP
 #    fi
 #done
 
-ovs-vsctl add-br br0 # add the bridge, or switch
-ovs-vsctl add-port br0 ${!choice} # add the chosen interface to the bridge
-
+# stop wireless service and DNS service so we can edit them without it being messy
 systemctl stop wpa_supplicant
 systemctl stop systemd-resolved
 
@@ -123,9 +129,10 @@ ignore_broadcast_ssid=0
 ssid=$ssid
 EOF
 
-# specify location of configure
+# specify location of configuration file for hostapd
 sed -i 's:#DAEMON_CONF="":DAEMON_CONF="/etc/hostapd/hostapd.conf":' /etc/default/hostapd
 
+# This is for open wifi. Edit this for specific networks... or just plug in ethernet
 cat > /root/wpa.conf << EOF
 network={
     key_mgmt=NONE
@@ -133,17 +140,25 @@ network={
 }
 EOF
 
+# connect to the internet (This is to get to the ODL instance)
 wpa_supplicant -i wlp2s0 -c wpa.conf -B
+
+# wait for a connection
 sleep 5
+
+# pull dhcp or you're just connected to wifi but have no ip.. like plugging into a switch but. no IP.
 dhclient wlp2s0
+
 # update dns
 sed -i '/nameserver/i \
     nameserver 8.8.8.8' /etc/resolv.conf
 
+# start the access point and the dhcp server
 systemctl unmask hostapd
 systemctl start hostapd
 systemctl start dnsmasq
 
+# set the controller with the specified ip and the default Openflow port
 ovs-vsctl set-controller br0 tcp:$IP:6633
 
 
